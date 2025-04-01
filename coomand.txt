@@ -1,0 +1,6 @@
+srun -p gpu --cpus-per-task=4 --mem-per-cpu=2000 --time=00:05:00 --ntasks=1 --gres=gpu:1 ./laplace_cpu
+
+
+ srun -p gpu --gres=gpu:1 --ntasks=1 --time=00:05:00 --mem=40G --reservation=p_es_itkpp_204 ./laplace  
+
+

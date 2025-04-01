@@ -5,7 +5,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <sstream>
-
+#include <omp.h>
+#include <stdio.h>
 
 using namespace std;
 
@@ -104,6 +105,19 @@ int main(){
     const double E0 = p0/(gamma_val - 1.0) + 0.5*rho0*(u0*u0 + v0*v0);
 
     // ----- Initialize grid and obstacle mask -----
+    // I'll add openmp code here 
+
+
+    #pragma omp target data map(tofrom: solid[0:(Nx+2)*(Ny+2)], \
+                                rho[0:(Nx+2)*(Ny+2)],   \
+                                rhou[0:(Nx+2)*(Ny+2)],  \
+                                rhov[0:(Nx+2)*(Ny+2)],  \
+                                E[0:(Nx+2)*(Ny+2)])  \
+                        map(to: dx, dy, cx, cy, radius, rho0, p0, gamma_val, u0, v0, E0)
+    {
+    // Start timing on the host.
+    double t_start = omp_get_wtime();
+    
     for (int i = 0; i < Nx+2; i++){
         for (int j = 0; j < Ny+2; j++){
             // Compute cell center coordinates
@@ -126,6 +140,10 @@ int main(){
             }
         }
     }
+        // End timing.
+        double t_end = omp_get_wtime();
+        printf("Kernel execution time: %f seconds\n", t_end - t_start);
+    }
 
     // ----- Determine time step from CFL condition -----
     double c0 = sqrt(gamma_val * p0 / rho0);
@@ -135,9 +153,28 @@ int main(){
     const int nSteps = 2000;
 
     // ----- Main time-stepping loop -----
+
+
+    // and perhaps here or in the inner loops of the main time-stepping loop 
+    
+    #pragma omp target data map(tofrom: rho[0:(Nx+2)*(Ny+2)], \
+                                   rhou[0:(Nx+2)*(Ny+2)], \
+                                   rhov[0:(Nx+2)*(Ny+2)], \
+                                   E[0:(Nx+2)*(Ny+2)],    \
+                                   rho_new[0:(Nx+2)*(Ny+2)], \
+                                   rhou_new[0:(Nx+2)*(Ny+2)], \
+                                   rhov_new[0:(Nx+2)*(Ny+2)], \
+                                   E_new[0:(Nx+2)*(Ny+2)], \
+                                   solid[0:(Nx+2)*(Ny+2)]) \
+                        map(to: dx, dy, cx, cy, radius, rho0, p0, gamma_val, u0, v0, E0, dt)
+{
+    double t_start = omp_get_wtime();
+
     for (int n = 0; n < nSteps; n++){
         // --- Apply boundary conditions on ghost cells ---
         // Left boundary (inflow): fixed free-stream state
+
+        #pragma omp target teams distribute parallel for 
         for (int j = 0; j < Ny+2; j++){
             rho[0*(Ny+2)+j] = rho0;
             rhou[0*(Ny+2)+j] = rho0*u0;
@@ -145,6 +182,7 @@ int main(){
             E[0*(Ny+2)+j] = E0;
         }
         // Right boundary (outflow): copy from the interior
+        #pragma omp target teams distribute parallel for 
         for (int j = 0; j < Ny+2; j++){
             rho[(Nx+1)*(Ny+2)+j] = rho[Nx*(Ny+2)+j];
             rhou[(Nx+1)*(Ny+2)+j] = rhou[Nx*(Ny+2)+j];
@@ -152,6 +190,7 @@ int main(){
             E[(Nx+1)*(Ny+2)+j] = E[Nx*(Ny+2)+j];
         }
         // Bottom boundary: reflective
+        #pragma omp target teams distribute parallel for 
         for (int i = 0; i < Nx+2; i++){
             rho[i*(Ny+2)+0] = rho[i*(Ny+2)+1];
             rhou[i*(Ny+2)+0] = rhou[i*(Ny+2)+1];
@@ -159,6 +198,7 @@ int main(){
             E[i*(Ny+2)+0] = E[i*(Ny+2)+1];
         }
         // Top boundary: reflective
+        #pragma omp target teams distribute parallel for 
         for (int i = 0; i < Nx+2; i++){
             rho[i*(Ny+2)+(Ny+1)] = rho[i*(Ny+2)+Ny];
             rhou[i*(Ny+2)+(Ny+1)] = rhou[i*(Ny+2)+Ny];
@@ -167,6 +207,8 @@ int main(){
         }
 
         // --- Update interior cells using a Lax-Friedrichs scheme ---
+
+        #pragma omp target teams distribute parallel for collapse(2)
         for (int i = 1; i <= Nx; i++){
             for (int j = 1; j <= Ny; j++){
                 // If the cell is inside the solid obstacle, do not update it
@@ -215,6 +257,8 @@ int main(){
         }
 
         // Copy updated values back
+        #pragma omp target teams distribute parallel for collapse(2)
+
         for (int i = 1; i <= Nx; i++){
             for (int j = 1; j <= Ny; j++){
                 rho[i*(Ny+2)+j] = rho_new[i*(Ny+2)+j];
@@ -226,6 +270,7 @@ int main(){
 
         // Calculate total kinetic energy
         double total_kinetic = 0.0;
+        #pragma omp target teams distribute parallel for collapse(2) reduction(+:total_kinetic)
         for (int i = 1; i <= Nx; i++) {
             for (int j = 1; j <= Ny; j++) {
                 double u = rhou[i*(Ny+2)+j] / rho[i*(Ny+2)+j];
@@ -238,7 +283,13 @@ int main(){
         if (n % 50 == 0) {
             cout << "Step " << n << " completed, total kinetic energy: " << total_kinetic << endl;
         }
-    }
+    }       // end of time-stepping loop 
+
+
+    double t_end = omp_get_wtime();
+    printf("Time stepping kernel execution time: %f seconds\n", t_end - t_start);
+
+    } // end of openmp gpu kernel 
 
     return 0;
 }
